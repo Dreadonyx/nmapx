@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NmapX</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+</head>
+<body>
+
+<canvas id="bg"></canvas>
+
+<div class="app">
+
+  <!-- ── sidebar ── -->
+  <aside class="sidebar">
+    <div class="sidebar-top">
+
+      <div class="logo">
+        <div class="logo-icon">⬡</div>
+        Nmap<span class="accent">X</span>
+      </div>
+
+      <div class="field">
+        <label>Target</label>
+        <input id="target" type="text" placeholder="IP, hostname, or CIDR..." />
+      </div>
+
+      <div style="margin-bottom:1.25rem">
+        <div class="section-label">Scan Profile</div>
+        <div class="profile-grid" id="profile-grid"></div>
+      </div>
+
+      <div class="field hidden" id="custom-section">
+        <label>Custom Flags</label>
+        <input id="custom-flags" type="text" placeholder="-sV -T4 -p 80,443..." />
+      </div>
+
+      <button class="btn-scan" id="btn-scan">▶ Run Scan</button>
+      <button class="btn-stop hidden" id="btn-stop" style="margin-top:.5rem">■ Stop Scan</button>
+
+    </div>
+
+    <div class="sidebar-bottom">
+
+      <div class="divider"></div>
+
+      <div class="stats-grid hidden" id="sidebar-stats">
+        <div class="stat">
+          <span class="stat-val" id="stat-up">—</span>
+          <span class="stat-lbl">Hosts</span>
+        </div>
+        <div class="stat">
+          <span class="stat-val" id="stat-ports">—</span>
+          <span class="stat-lbl">Open</span>
+        </div>
+        <div class="stat">
+          <span class="stat-val" id="stat-time">—</span>
+          <span class="stat-lbl">Time</span>
+        </div>
+      </div>
+
+      <div id="history-section" style="display:none">
+        <div class="section-label" style="margin-bottom:.5rem">Recent Scans</div>
+        <div class="history-wrap" id="history-list"></div>
+      </div>
+
+    </div>
+  </aside>
+
+  <!-- ── main ── -->
+  <main class="main">
+
+    <!-- terminal -->
+    <div class="terminal-wrap">
+      <div class="terminal-bar">
+        <span class="dot red"></span>
+        <span class="dot yellow"></span>
+        <span class="dot green"></span>
+        <span class="terminal-title" id="terminal-title">nmap ready</span>
+        <button class="btn-clear" id="btn-clear">clear</button>
+      </div>
+      <div class="terminal" id="terminal">
+        <div class="term-placeholder">Enter a target and run a scan to see live output...</div>
+      </div>
+    </div>
+
+    <!-- results -->
+    <div class="results hidden" id="results">
+      <div class="results-header">
+        <span class="results-title">Scan Results</span>
+        <div class="results-actions">
+          <button class="btn-action primary" id="btn-analyze">⚡ AI Analysis</button>
+          <button class="btn-action" id="btn-export">↓ Export JSON</button>
+        </div>
+      </div>
+      <div class="hosts-grid" id="hosts-grid"></div>
+    </div>
+
+    <!-- AI panel -->
+    <div class="analysis-panel hidden" id="analysis-panel">
+      <div class="analysis-header">
+        <span>⚡ AI Threat Analysis</span>
+        <button class="btn-close" id="btn-close-analysis">✕</button>
+      </div>
+      <div class="analysis-loader hidden" id="analysis-loader">
+        <div class="spinner"></div> Analyzing with Groq...
+      </div>
+      <div class="analysis-body" id="analysis-body"></div>
+    </div>
+
+  </main>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
