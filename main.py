@@ -4,18 +4,19 @@ WebSocket streams live nmap output, parses XML, Groq AI threat analysis.
 """
 
 import os, asyncio, subprocess, tempfile, json, re
+from pathlib import Path
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from groq import Groq
-import parser as nmap_parser
+import nmap_parser
 
 load_dotenv()
 
 app = FastAPI(title="NmapX")
-app.mount("/static", StaticFiles(directory="static"), name="static")
+app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")), name="static")
 
 GROQ_KEY    = os.getenv("GROQ_API_KEY")
 groq_client = Groq(api_key=GROQ_KEY) if GROQ_KEY else None
@@ -67,7 +68,13 @@ async def scan_ws(websocket: WebSocket):
 
         flags = list(SCAN_PROFILES.get(profile, SCAN_PROFILES["fast"])["flags"])
         if profile == "custom" and custom_flags:
-            flags = custom_flags.split()
+            BLOCKED_FLAGS = {'-oN', '-oX', '-oG', '-oA', '-oS', '--script', '-iL', '--excludefile', '--datadir', '--resume'}
+            user_flags = custom_flags.split()
+            for f in user_flags:
+                if f in BLOCKED_FLAGS or any(f.startswith(b + '=') for b in BLOCKED_FLAGS):
+                    await websocket.send_json({"type": "error", "msg": f"Flag '{f}' is not allowed."})
+                    return
+            flags = user_flags
 
         # XML output file
         with tempfile.NamedTemporaryFile(suffix=".xml", delete=False) as tf:
@@ -103,7 +110,10 @@ async def scan_ws(websocket: WebSocket):
         await websocket.send_json({"type": "done", "result": result})
 
     except WebSocketDisconnect:
-        pass
+        try:
+            proc.terminate()
+        except Exception:
+            pass
     except Exception as e:
         try:
             await websocket.send_json({"type": "error", "msg": str(e)})
