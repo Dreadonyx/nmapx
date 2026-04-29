@@ -77,19 +77,16 @@ async def scan_ws(websocket: WebSocket):
 
         flags = list(SCAN_PROFILES.get(profile, SCAN_PROFILES["fast"])["flags"])
         if profile == "custom" and custom_flags:
+            # Only block output formatting flags since NmapX relies on -oX to parse results.
+            # Other flags are permitted because the user is hosting locally.
             BLOCKED_FLAGS = {
-                '-oN', '-oX', '-oG', '-oA', '-oS',
-                '--script', '--script-args', '--script-trace', '--script-updatedb',
-                '-iL', '-iR', '--excludefile', '--datadir', '--resume',
-                '--proxies', '--send-eth', '--send-ip',
-                '--privileged', '--unprivileged',
-                '--iflist', '--route-dst',
+                '-oN', '-oX', '-oG', '-oA', '-oS', '--resume'
             }
             user_flags = custom_flags.split()
             for f in user_flags:
                 flag_base = f.split('=')[0]
                 if flag_base in BLOCKED_FLAGS:
-                    await websocket.send_json({"type": "error", "msg": f"Flag '{f}' is not allowed."})
+                    await websocket.send_json({"type": "error", "msg": f"Flag '{f}' is not allowed because NmapX requires control over the XML output."})
                     return
             flags = user_flags
 
