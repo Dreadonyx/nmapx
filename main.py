@@ -12,6 +12,9 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 from groq import Groq
 import nmap_parser
+import logging
+
+logger = logging.getLogger("nmapx")
 
 load_dotenv()
 
@@ -20,6 +23,10 @@ app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")
 
 GROQ_KEY    = os.getenv("GROQ_API_KEY")
 groq_client = Groq(api_key=GROQ_KEY) if GROQ_KEY else None
+
+MAX_CONCURRENT_SCANS = 3
+SCAN_TIMEOUT         = 300          # 5 minutes
+scan_semaphore       = asyncio.Semaphore(MAX_CONCURRENT_SCANS)
 
 SCAN_PROFILES = {
     "fast":    {"flags": ["-T4", "-F"],                          "label": "Fast Scan"},
@@ -50,11 +57,13 @@ def profiles():
 @app.websocket("/ws/scan")
 async def scan_ws(websocket: WebSocket):
     await websocket.accept()
+    proc = None
+    xml_path = None
 
     try:
         data = await websocket.receive_json()
-        target      = data.get("target", "").strip()
-        profile     = data.get("profile", "fast")
+        target       = data.get("target", "").strip()
+        profile      = data.get("profile", "fast")
         custom_flags = data.get("custom_flags", "").strip()
 
         if not target:
@@ -62,62 +71,85 @@ async def scan_ws(websocket: WebSocket):
             return
 
         # basic target sanity — allow IPs, ranges, hostnames, CIDR
-        if not re.match(r'^[a-zA-Z0-9._/\-: ,]+$', target):
+        if not re.match(r'^[a-zA-Z0-9._/\-:,]+$', target):
             await websocket.send_json({"type": "error", "msg": "Invalid target."})
             return
 
         flags = list(SCAN_PROFILES.get(profile, SCAN_PROFILES["fast"])["flags"])
         if profile == "custom" and custom_flags:
-            BLOCKED_FLAGS = {'-oN', '-oX', '-oG', '-oA', '-oS', '--script', '-iL', '--excludefile', '--datadir', '--resume'}
+            BLOCKED_FLAGS = {
+                '-oN', '-oX', '-oG', '-oA', '-oS',
+                '--script', '--script-args', '--script-trace', '--script-updatedb',
+                '-iL', '-iR', '--excludefile', '--datadir', '--resume',
+                '--proxies', '--send-eth', '--send-ip',
+                '--privileged', '--unprivileged',
+                '--iflist', '--route-dst',
+            }
             user_flags = custom_flags.split()
             for f in user_flags:
-                if f in BLOCKED_FLAGS or any(f.startswith(b + '=') for b in BLOCKED_FLAGS):
+                flag_base = f.split('=')[0]
+                if flag_base in BLOCKED_FLAGS:
                     await websocket.send_json({"type": "error", "msg": f"Flag '{f}' is not allowed."})
                     return
             flags = user_flags
 
-        # XML output file
-        with tempfile.NamedTemporaryFile(suffix=".xml", delete=False) as tf:
-            xml_path = tf.name
+        # concurrency check
+        if scan_semaphore.locked() and scan_semaphore._value == 0:
+            await websocket.send_json({"type": "error", "msg": f"Max {MAX_CONCURRENT_SCANS} concurrent scans. Try again later."})
+            return
 
-        cmd = ["nmap"] + flags + ["-oX", xml_path, "--stats-every", "3s"] + target.split(",")
-        await websocket.send_json({"type": "start", "cmd": " ".join(cmd)})
+        async with scan_semaphore:
+            # XML output file
+            with tempfile.NamedTemporaryFile(suffix=".xml", delete=False) as tf:
+                xml_path = tf.name
 
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-        )
+            cmd = ["nmap"] + flags + ["-oX", xml_path, "--stats-every", "3s"] + target.split(",")
+            await websocket.send_json({"type": "start", "cmd": " ".join(cmd)})
 
-        # stream output line by line
-        async for line in proc.stdout:
-            text = line.decode("utf-8", errors="replace").rstrip()
-            if text:
-                await websocket.send_json({"type": "output", "line": text})
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+            )
 
-        await proc.wait()
+            # stream output line by line with timeout
+            try:
+                async with asyncio.timeout(SCAN_TIMEOUT):
+                    async for line in proc.stdout:
+                        text = line.decode("utf-8", errors="replace").rstrip()
+                        if text:
+                            await websocket.send_json({"type": "output", "line": text})
+                    await proc.wait()
+            except TimeoutError:
+                proc.terminate()
+                await websocket.send_json({"type": "error", "msg": f"Scan timed out after {SCAN_TIMEOUT}s."})
+                return
 
-        # parse XML
-        try:
-            with open(xml_path) as f:
-                xml_str = f.read()
-            result = nmap_parser.parse_xml(xml_str)
-        except Exception as e:
-            result = {"hosts": [], "stats": {}, "parse_error": str(e)}
-        finally:
-            os.unlink(xml_path)
+            # parse XML
+            try:
+                with open(xml_path) as f:
+                    xml_str = f.read()
+                result = nmap_parser.parse_xml(xml_str)
+            except Exception as e:
+                result = {"hosts": [], "stats": {}, "parse_error": str(e)}
+            finally:
+                os.unlink(xml_path)
+                xml_path = None
 
-        await websocket.send_json({"type": "done", "result": result})
+            await websocket.send_json({"type": "done", "result": result})
 
     except WebSocketDisconnect:
-        try:
+        if proc and proc.returncode is None:
             proc.terminate()
-        except Exception:
-            pass
     except Exception as e:
+        logger.exception("Scan WebSocket error")
         try:
             await websocket.send_json({"type": "error", "msg": str(e)})
-        except: pass
+        except Exception:
+            pass
+    finally:
+        if xml_path and os.path.exists(xml_path):
+            os.unlink(xml_path)
 
 
 @app.post("/analyze")
@@ -168,3 +200,8 @@ async def analyze(req: AnalyzeRequest):
     )
 
     return JSONResponse({"analysis": resp.choices[0].message.content})
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
