@@ -1,4 +1,4 @@
-# nmapx 🔍
+# nmapx 
 
 > A clean web UI for Nmap — live output streaming + Groq AI threat analysis.
 
